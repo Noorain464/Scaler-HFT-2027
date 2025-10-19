@@ -2,20 +2,18 @@
 #include <algorithm>
 
 void OrderBook::add_order(const Order& order) {
-    Order* o = pool_.allocate();
+    Order* o = pool_.construct(order); 
     if (!o) {
         std::cerr << "Order pool full!\n";
         return;
     }
-    *o = order;
 
     if (order.is_buy) {
         bids_[order.price].push_back(o);
-        order_lookup_[order.order_id] = o;
     } else {
         asks_[order.price].push_back(o);
-        order_lookup_[order.order_id] = o;
     }
+    order_lookup_[order.order_id] = o;
 }
 
 bool OrderBook::cancel_order(uint64_t order_id) {
@@ -39,10 +37,9 @@ bool OrderBook::cancel_order(uint64_t order_id) {
     }
 
     order_lookup_.erase(it_lookup);
-    pool_.deallocate(order_ptr);
+    pool_.destroy(order_ptr);  
     return true;
 }
-
 
 bool OrderBook::amend_order(uint64_t order_id, double new_price, uint64_t new_quantity) {
     auto it = order_lookup_.find(order_id);

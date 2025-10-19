@@ -6,7 +6,85 @@
 #include <iostream>
 #include <stack>
 #include <list>
+#include <new>
+#include <type_traits>
 
+// --------------------------------------
+// Generic MemoryPool
+// --------------------------------------
+template<typename T, size_t BlockSize = 4096>
+class MemoryPool {
+private:
+    struct Block {
+        static constexpr size_t num_objects = BlockSize / sizeof(T);
+        typename std::aligned_storage<sizeof(T), alignof(T)>::type data[num_objects];
+        Block* next;
+    };
+
+    Block* current_block_;
+    size_t current_offset_;
+    std::vector<Block*> all_blocks_;
+    std::vector<T*> free_list_;
+
+public:
+    MemoryPool() : current_block_(nullptr), current_offset_(0) {
+        allocate_new_block();
+    }
+
+    ~MemoryPool() {
+        for (auto* block : all_blocks_)
+            delete block;
+    }
+
+    MemoryPool(const MemoryPool&) = delete;
+    MemoryPool& operator=(const MemoryPool&) = delete;
+
+    template<typename... Args>
+    T* construct(Args&&... args) {
+        T* ptr = allocate();
+        new (ptr) T(std::forward<Args>(args)...);
+        return ptr;
+    }
+
+    void destroy(T* ptr) {
+        if (ptr) {
+            ptr->~T();
+            free_list_.push_back(ptr);
+        }
+    }
+
+    T* allocate() {
+        if (!free_list_.empty()) [[unlikely]] {
+            T* ptr = free_list_.back();
+            free_list_.pop_back();
+            return ptr;
+        }
+        if (current_block_ == nullptr || current_offset_ >= Block::num_objects) [[unlikely]] {
+            allocate_new_block();
+        }
+        T* ptr = reinterpret_cast<T*>(&current_block_->data[current_offset_]);
+        ++current_offset_;
+        return ptr;
+    }
+
+    void deallocate(T* ptr) {
+        free_list_.push_back(ptr);
+    }
+
+private:
+    void allocate_new_block() {
+        Block* new_block = new Block();
+        new_block->next = nullptr;
+        if (current_block_) current_block_->next = new_block;
+        all_blocks_.push_back(new_block);
+        current_block_ = new_block;
+        current_offset_ = 0;
+    }
+};
+
+// --------------------------------------
+// Order Structures
+// --------------------------------------
 struct Order {
     uint64_t order_id;
     bool is_buy;           
@@ -20,30 +98,9 @@ struct PriceLevel {
     uint64_t total_quantity;
 };
 
-class OrderPool {
-public:
-    explicit OrderPool(size_t capacity) {
-        orders_.resize(capacity);
-        for (size_t i = 0; i < capacity; ++i)
-            free_indices_.push(i);
-    }
-
-    Order* allocate() {
-        if (free_indices_.empty()) return nullptr;
-        size_t idx = free_indices_.top(); free_indices_.pop();
-        return &orders_[idx];
-    }
-
-    void deallocate(Order* order_ptr) {
-        size_t idx = order_ptr - &orders_[0];
-        free_indices_.push(idx);
-    }
-
-private:
-    std::vector<Order> orders_;
-    std::stack<size_t> free_indices_;
-};
-
+// --------------------------------------
+// OrderBook class
+// --------------------------------------
 class OrderBook {
 public:
     void add_order(const Order& order);
@@ -56,5 +113,5 @@ private:
     std::map<double, std::list<Order*>, std::greater<double>> bids_;
     std::map<double, std::list<Order*>, std::less<double>> asks_;
     std::unordered_map<uint64_t, Order*> order_lookup_;
-    OrderPool pool_{200000};
+    MemoryPool<Order, 4096 * 10> pool_; 
 };
